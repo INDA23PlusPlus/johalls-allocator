@@ -100,26 +100,33 @@ fn contains(buf: ?[]u8, allocation: []u8) bool {
 const BuddyAllocatorNode = struct {
     left: ?*BuddyAllocatorNode,
     right: ?*BuddyAllocatorNode,
+    num_allocations_in_subtree: usize,
     buf: []u8,
     allocated: bool,
 
     const Self = @This();
 
-    pub fn alloc(self: *Self, len: usize, ptr_align: u8) ?[]u8 {
+    pub fn alloc(self: *Self, len: usize, ptr_align: u8) ?[*]u8 {
         if (self.allocated) {
             return null;
         }
 
         if (self.left) |left| {
             if (left.alloc(len, ptr_align)) |allocation| {
+                self.num_allocations_in_subtree += 1;
                 return allocation;
             }
         }
 
         if (self.right) |right| {
             if (right.alloc(len, ptr_align)) |allocation| {
+                self.num_allocations_in_subtree += 1;
                 return allocation;
             }
+        }
+
+        if (self.num_allocations_in_subtree > 0) {
+            return null;
         }
 
         const start_idx = align_offset(self.buf.ptr, 0, ptr_align);
@@ -127,17 +134,21 @@ const BuddyAllocatorNode = struct {
 
         if (end_idx > self.buf.len) return null;
 
-        return self.buf[start_idx..end_idx];
+        self.allocated = true;
+
+        return self.buf[start_idx..end_idx].ptr;
     }
 
     pub fn free(self: *Self, allocation: []u8) bool {
         if (self.left) |left| {
             if (left.free(allocation)) {
+                self.num_allocations_in_subtree -= 1;
                 return true;
             }
         }
         if (self.right) |right| {
             if (right.free(allocation)) {
+                self.num_allocations_in_subtree -= 1;
                 return true;
             }
         }
@@ -149,12 +160,33 @@ const BuddyAllocatorNode = struct {
         }
     }
 
+    pub fn resize(self: *Self, allocation: []u8, len: usize, ptr_align: u8) bool {
+        if (self.left) |left| {
+            if (left.resize(allocation, len, ptr_align)) {
+                return true;
+            }
+        }
+        if (self.right) |right| {
+            if (right.resize(allocation, len, ptr_align)) {
+                return true;
+            }
+        }
+
+        if (contains(self.buf, allocation)) {
+            const start_idx = align_offset(self.buf.ptr, 0, ptr_align);
+            const end_idx = start_idx + len;
+
+            if (end_idx > self.buf.len) return false;
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     fn split(self: *Self, allocator_nodes: *[]BuddyAllocatorNode) void {
         if (self.buf.len <= 65536) {
             return;
         }
-
-        std.debug.print("{} {}\n", .{ self.buf.len, allocator_nodes.len });
 
         std.debug.assert(self.buf.len > 1);
         std.debug.assert(self.left == null and self.right == null);
@@ -183,12 +215,15 @@ fn wasted_space(comptime T: type, buf: []u8) usize {
 }
 
 fn num_allocator_nodes(min_size: usize, n: usize) usize {
-    var sz: usize = min_size;
-    var ans: usize = 0;
-    while (sz <= n) : (sz *= 2) {
-        ans += sz / min_size;
+    var num_nodes: usize = 1;
+    var layer: usize = 1;
+    var size: usize = n;
+    while (size > min_size) {
+        layer *= 2;
+        num_nodes += layer;
+        size = (size + 1) / 2;
     }
-    return @max(ans, 1);
+    return num_nodes;
 }
 
 test "correct allocator node count" {
@@ -200,6 +235,12 @@ fn compute_overhead(min_size: usize, n: usize, buf: []u8) usize {
     return wasted_space(BuddyAllocatorNode, buf) + num_allocator_nodes(min_size, n) * @sizeOf(BuddyAllocatorNode);
 }
 
+const BuddyAllocatorVtable: Allocator.VTable = .{
+    .alloc = BuddyAllocator.alloc,
+    .free = BuddyAllocator.free,
+    .resize = BuddyAllocator.resize,
+};
+
 pub const BuddyAllocator = struct {
     buf: []u8, // contains both allocator nodes and actual buffer of data
     usable_buf: []u8,
@@ -210,13 +251,39 @@ pub const BuddyAllocator = struct {
 
     const Self = @This();
 
+    pub fn allocator(self: *Self) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &BuddyAllocatorVtable,
+        };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.root.alloc(len, ptr_align);
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
+        _ = buf_align;
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        _ = self.root.free(buf);
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.root.resize(buf, new_len, buf_align);
+    }
+
     pub fn usable_size(self: *Self) usize {
         return self.usable_buf.len;
     }
 
     pub fn init(buf: []u8) !BuddyAllocator {
-        const min_size = 65536;
-        std.debug.print("overhead: {}\n", .{compute_overhead(min_size, min_size, buf)});
+        const min_size = 4096;
+        // std.debug.print("overhead: {}\n", .{compute_overhead(min_size, min_size, buf)});
         if (compute_overhead(min_size, min_size, buf) > buf.len) {
             return error.NotEnoughSpace;
         }
@@ -239,6 +306,7 @@ pub const BuddyAllocator = struct {
         var allocator_nodes = p[0..num_allocator_nodes(min_size, size_allocated)];
         for (0..allocator_nodes.len) |i| {
             allocator_nodes[i].allocated = false;
+            allocator_nodes[i].num_allocations_in_subtree = 0;
             allocator_nodes[i].left = null;
             allocator_nodes[i].right = null;
         }
@@ -258,3 +326,12 @@ pub const BuddyAllocator = struct {
         return result;
     }
 };
+
+var buddy_allocator_buf: [64 << 20]u8 = undefined;
+test "standard allocator tests on BuddyAllocator" {
+    var buddy_allocator = std.mem.validationWrap(try BuddyAllocator.init(&buddy_allocator_buf));
+    try std.heap.testAllocator(buddy_allocator.allocator());
+    try std.heap.testAllocatorAligned(buddy_allocator.allocator());
+    try std.heap.testAllocatorLargeAlignment(buddy_allocator.allocator());
+    try std.heap.testAllocatorAlignedShrink(buddy_allocator.allocator());
+}
