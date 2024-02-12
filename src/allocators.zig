@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-export fn align_offset(p: [*]u8, id: usize, ptr_align: u8) usize {
+fn align_offset(p: [*]u8, id: usize, ptr_align: u8) usize {
     const alignment: usize = @as(usize, 1) << @intCast(ptr_align);
     const remainder = @intFromPtr(p + id) % alignment;
     return id + (alignment - remainder) % alignment;
