@@ -24,28 +24,6 @@ pub fn main() !void {
         alloc.free(bufs[0]);
         std.debug.print("free:{}KB\n", .{linear_alloc.remaining_capacity() >> 10});
     }
-    // {
-    //     // var small_buf: [128 << 10]u8 = undefined;
-    //     var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
-    //     std.debug.print("{}\n", .{buddy_alloc.usable_size()});
-
-    //     var allocs: [128][]u8 = undefined;
-    //     for (0..128) |i| {
-    //         allocs[i] = buddy_alloc.root.alloc(8, 3).?[0..8];
-    //         const p: *u64 = @ptrCast(@alignCast(allocs[i].ptr));
-    //         p.* = 0;
-    //         for (0..8) |j| {
-    //             p.* = p.* * 256 + 'A' + 7 - j;
-    //         }
-    //         std.debug.print("{s}\n", .{allocs[i]});
-    //     }
-
-    //     for (0..128) |i| {
-    //         _ = buddy_alloc.root.free(allocs[(i * 7) % 128]);
-    //     }
-
-    //     std.debug.assert(buddy_alloc.root.num_allocations_in_subtree == 0);
-    // }
     {
         var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
         var alloc = buddy_alloc.allocator();
@@ -58,7 +36,7 @@ pub fn main() !void {
             ints1[i] = i;
             ints2[i] = i;
         }
-        
+
         for (0..128) |i| {
             std.debug.print("{}\n", .{ints1[i]});
             std.debug.print("{}\n", .{ints2[i]});

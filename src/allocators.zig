@@ -97,23 +97,33 @@ fn contains(buf: ?[]u8, allocation: []u8) bool {
     }
 }
 
+const BuddyAllocReturn = struct {
+    data: [*]u8,
+    size_buffer_used: usize,
+};
+
 const BuddyAllocatorNode = struct {
     left: ?*BuddyAllocatorNode,
     right: ?*BuddyAllocatorNode,
     num_allocations_in_subtree: usize,
+    remaining_capacity: usize,
     buf: []u8,
     allocated: bool,
 
     const Self = @This();
 
-    pub fn alloc(self: *Self, len: usize, ptr_align: u8) ?[*]u8 {
+    pub fn alloc(self: *Self, len: usize, ptr_align: u8) ?BuddyAllocReturn {
         if (self.allocated) {
+            return null;
+        }
+        if (len > self.remaining_capacity) {
             return null;
         }
 
         if (self.left) |left| {
             if (left.alloc(len, ptr_align)) |allocation| {
                 self.num_allocations_in_subtree += 1;
+                self.remaining_capacity -= allocation.size_buffer_used;
                 return allocation;
             }
         }
@@ -121,6 +131,7 @@ const BuddyAllocatorNode = struct {
         if (self.right) |right| {
             if (right.alloc(len, ptr_align)) |allocation| {
                 self.num_allocations_in_subtree += 1;
+                self.remaining_capacity -= allocation.size_buffer_used;
                 return allocation;
             }
         }
@@ -132,35 +143,47 @@ const BuddyAllocatorNode = struct {
         const start_idx = align_offset(self.buf.ptr, 0, ptr_align);
         const end_idx = start_idx + len;
 
-        if (end_idx > self.buf.len) return null;
-
+        if (end_idx > self.buf.len) {
+            return null;
+        }
         self.allocated = true;
+        self.remaining_capacity = 0;
 
-        return self.buf[start_idx..end_idx].ptr;
+        return .{ .data = self.buf[start_idx..end_idx].ptr, .size_buffer_used = self.buf.len };
     }
 
-    pub fn free(self: *Self, allocation: []u8) bool {
+    pub fn free(self: *Self, allocation: []u8) usize {
+        if (!contains(self.buf, allocation)) {
+            return 0;
+        }
+
         if (self.left) |left| {
-            if (left.free(allocation)) {
+            const t = left.free(allocation);
+            if (t > 0) {
                 self.num_allocations_in_subtree -= 1;
-                return true;
+                self.remaining_capacity += t;
+                return t;
             }
         }
         if (self.right) |right| {
-            if (right.free(allocation)) {
+            const t = right.free(allocation);
+            if (t > 0) {
                 self.num_allocations_in_subtree -= 1;
-                return true;
+                self.remaining_capacity += t;
+                return t;
             }
         }
-        if (contains(self.buf, allocation)) {
-            self.allocated = false;
-            return true;
-        } else {
-            return false;
-        }
+
+        self.allocated = false;
+        self.remaining_capacity = self.buf.len;
+        return self.buf.len;
     }
 
     pub fn resize(self: *Self, allocation: []u8, len: usize, ptr_align: u8) bool {
+        if (!contains(self.buf, allocation)) {
+            return false;
+        }
+
         if (self.left) |left| {
             if (left.resize(allocation, len, ptr_align)) {
                 return true;
@@ -172,18 +195,15 @@ const BuddyAllocatorNode = struct {
             }
         }
 
-        if (contains(self.buf, allocation)) {
-            const start_idx = align_offset(self.buf.ptr, 0, ptr_align);
-            const end_idx = start_idx + len;
+        const start_idx = align_offset(self.buf.ptr, 0, ptr_align);
+        const end_idx = start_idx + len;
 
-            if (end_idx > self.buf.len) return false;
-            return true;
-        } else {
-            return false;
-        }
+        if (end_idx > self.buf.len) return false;
+        return true;
     }
 
     fn split(self: *Self, allocator_nodes: *[]BuddyAllocatorNode) void {
+        self.remaining_capacity = self.buf.len;
         if (self.buf.len <= 65536) {
             return;
         }
@@ -261,7 +281,11 @@ pub const BuddyAllocator = struct {
     fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        return self.root.alloc(len, ptr_align);
+        if (self.root.alloc(len, ptr_align)) |allocation| {
+            return allocation.data;
+        } else {
+            return null;
+        }
     }
 
     fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
@@ -282,7 +306,7 @@ pub const BuddyAllocator = struct {
     }
 
     pub fn init(buf: []u8) !BuddyAllocator {
-        const min_size = 4096;
+        const min_size = 65536;
         // std.debug.print("overhead: {}\n", .{compute_overhead(min_size, min_size, buf)});
         if (compute_overhead(min_size, min_size, buf) > buf.len) {
             return error.NotEnoughSpace;
@@ -301,6 +325,9 @@ pub const BuddyAllocator = struct {
         }
 
         const size_allocated = lo;
+
+        // const oh = compute_overhead(min_size, size_allocated, buf) * 100;
+        // std.debug.print("overhead: {}.{}%\n", .{ oh / buf.len, oh * 1000 / buf.len % 1000 });
 
         var p: [*]BuddyAllocatorNode = @ptrCast(@alignCast(buf.ptr + wasted_space(BuddyAllocatorNode, buf)));
         var allocator_nodes = p[0..num_allocator_nodes(min_size, size_allocated)];
