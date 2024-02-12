@@ -24,4 +24,21 @@ pub fn main() !void {
         alloc.free(bufs[0]);
         try stdout.print("free:{}KB\n", .{linear_alloc.remaining_capacity() >> 10});
     }
+    {
+        var small_buf: [128]u8 = undefined;
+        var buddy_alloc = try allocators.BuddyAllocator.init(&small_buf);
+        try stdout.print("{}\n", .{buddy_alloc.usable_size()});
+
+        
+        for (0..100) |_| {
+            const alloc = buddy_alloc.root.alloc(8, 3).?;
+            defer _ = buddy_alloc.root.free(alloc);
+            const p: *u64 = @ptrCast(@alignCast(alloc.ptr));
+            p.* = 0;
+            for (0..8) |i| {
+                p.* = p.* * 256 + 'A' + i;
+            }
+            try stdout.print("{s}\n", .{alloc});
+        }
+    }
 }
