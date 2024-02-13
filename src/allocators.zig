@@ -108,14 +108,10 @@ const BuddyAllocatorNode = struct {
     num_allocations_in_subtree: usize,
     remaining_capacity: usize,
     buf: []u8,
-    allocated: bool,
 
     const Self = @This();
 
     pub fn alloc(self: *Self, len: usize, ptr_align: u8) ?BuddyAllocReturn {
-        if (self.allocated) {
-            return null;
-        }
         if (len > self.remaining_capacity) {
             return null;
         }
@@ -146,7 +142,6 @@ const BuddyAllocatorNode = struct {
         if (end_idx > self.buf.len) {
             return null;
         }
-        self.allocated = true;
         self.remaining_capacity = 0;
 
         return .{ .data = self.buf[start_idx..end_idx].ptr, .size_buffer_used = self.buf.len };
@@ -174,7 +169,6 @@ const BuddyAllocatorNode = struct {
             }
         }
 
-        self.allocated = false;
         self.remaining_capacity = self.buf.len;
         return self.buf.len;
     }
@@ -202,9 +196,9 @@ const BuddyAllocatorNode = struct {
         return true;
     }
 
-    fn split(self: *Self, allocator_nodes: *[]BuddyAllocatorNode) void {
+    fn split(self: *Self, allocator_nodes: *[]BuddyAllocatorNode, min_size: usize) void {
         self.remaining_capacity = self.buf.len;
-        if (self.buf.len <= 65536) {
+        if (self.buf.len <= min_size) {
             return;
         }
 
@@ -224,8 +218,8 @@ const BuddyAllocatorNode = struct {
         self.right.?.buf = right_buf;
         allocator_nodes.* = allocator_nodes.*[1..];
 
-        self.left.?.split(allocator_nodes);
-        self.right.?.split(allocator_nodes);
+        self.left.?.split(allocator_nodes, min_size);
+        self.right.?.split(allocator_nodes, min_size);
     }
 };
 
@@ -332,7 +326,6 @@ pub const BuddyAllocator = struct {
         var p: [*]BuddyAllocatorNode = @ptrCast(@alignCast(buf.ptr + wasted_space(BuddyAllocatorNode, buf)));
         var allocator_nodes = p[0..num_allocator_nodes(min_size, size_allocated)];
         for (0..allocator_nodes.len) |i| {
-            allocator_nodes[i].allocated = false;
             allocator_nodes[i].num_allocations_in_subtree = 0;
             allocator_nodes[i].left = null;
             allocator_nodes[i].right = null;
@@ -348,7 +341,7 @@ pub const BuddyAllocator = struct {
         result.usable_buf = buf[usable_start_idx..usable_end_idx];
 
         result.root.buf = result.usable_buf;
-        result.root.split(&allocator_nodes);
+        result.root.split(&allocator_nodes, min_size);
 
         return result;
     }
