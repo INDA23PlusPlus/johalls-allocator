@@ -79,12 +79,39 @@ fn contains(buf: ?[]u8, allocation: []u8) bool {
         const allocation_end = allocation_start + allocation.len;
 
         const allocation_start_within = start <= allocation_start and allocation_start < end;
-        const allocation_end_within = start <= allocation_end and allocation_end < end;
+        const allocation_end_within = start < allocation_end and allocation_end <= end;
 
         return allocation_start_within and allocation_end_within;
     } else {
         return false;
     }
+}
+
+/// returns `x` cast to a `T`
+fn get_runtime_constant(comptime T: type, x: anytype) T {
+    return x;
+}
+
+test "contains" {
+    var buf: [1024]u8 = undefined;
+
+    for (0..buf.len) |start| {
+        for (start + 1..buf.len) |end| {
+            try std.testing.expect(contains(&buf, buf[start..end]));
+        }
+        var alloc = buf[start..buf.len];
+        try std.testing.expect(contains(&buf, alloc));
+        alloc.len += 1;
+        try std.testing.expect(!contains(&buf, alloc));
+    }
+
+    // only way i found to make this not get turned into a constant
+
+    var alloc = buf[0..get_runtime_constant(usize, 1)];
+    try std.testing.expect(contains(&buf, alloc));
+    alloc.ptr -= 1;
+    alloc.len = 1;
+    try std.testing.expect(!contains(&buf, alloc));
 }
 
 const BuddyAllocReturn = struct {
