@@ -105,13 +105,20 @@ test "contains" {
         try std.testing.expect(!contains(&buf, alloc));
     }
 
-    // only way i found to make this not get turned into a constant
-
-    var alloc = buf[0..get_runtime_constant(usize, 1)];
-    try std.testing.expect(contains(&buf, alloc));
-    alloc.ptr -= 1;
-    alloc.len = 1;
-    try std.testing.expect(!contains(&buf, alloc));
+    {
+        var alloc = buf[0..get_runtime_constant(usize, 1)];
+        try std.testing.expect(contains(&buf, alloc));
+        alloc.ptr -= 1;
+        alloc.len = 1;
+        try std.testing.expect(!contains(&buf, alloc));
+    }
+    {
+        var alloc = buf[(buf.len - 1)..get_runtime_constant(usize, buf.len)];
+        try std.testing.expect(contains(&buf, alloc));
+        alloc.ptr += 1;
+        alloc.len = 1;
+        try std.testing.expect(!contains(&buf, alloc));
+    }
 }
 
 const BuddyAllocReturn = struct {
