@@ -26,20 +26,39 @@ pub fn main() !void {
     }
     {
         var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
-        var alloc = buddy_alloc.allocator();
-        var ints1 = try alloc.alloc(usize, 128);
-        defer alloc.free(ints1);
-        var ints2 = try alloc.alloc(usize, 128);
-        defer alloc.free(ints2);
-
-        for (0..128) |i| {
-            ints1[i] = i;
-            ints2[i] = i;
+        var validated = std.mem.validationWrap(&buddy_alloc);
+        var alloc = validated.allocator();
+        const N = 1 << 10;
+        var bufs: [N][]u8 = undefined;
+        for (0..N) |i| {
+            bufs[i] = try alloc.alloc(u8, 1 << 4);
         }
-
-        for (0..128) |i| {
-            std.debug.print("{}\n", .{ints1[i]});
-            std.debug.print("{}\n", .{ints2[i]});
+        for (0..N - 1) |i| {
+            alloc.free(bufs[N - i - 1]);
         }
+        std.debug.print("free:{}KB\n", .{buddy_alloc.remaining_capacity() >> 10});
+        std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggest_possible_allocation() >> 10});
+        alloc.free(bufs[0]);
+        std.debug.print("free:{}KB\n", .{buddy_alloc.remaining_capacity() >> 10});
+        std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggest_possible_allocation() >> 10});
     }
+    // {
+    //     var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
+    //     var alloc = buddy_alloc.allocator();
+
+    //     var ints1 = try alloc.alloc(usize, 128);
+    //     defer alloc.free(ints1);
+    //     var ints2 = try alloc.alloc(usize, 128);
+    //     defer alloc.free(ints2);
+
+    //     for (0..128) |i| {
+    //         ints1[i] = i;
+    //         ints2[i] = i;
+    //     }
+
+    //     for (0..128) |i| {
+    //         std.debug.print("{}\n", .{ints1[i]});
+    //         std.debug.print("{}\n", .{ints2[i]});
+    //     }
+    // }
 }
