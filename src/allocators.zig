@@ -99,7 +99,7 @@ const BuddyAllocatorNode = struct {
 
     const Self = @This();
 
-    pub fn alloc(self: *Self, len: usize, ptr_align: u8) ?BuddyAllocReturn {
+    fn alloc(self: *Self, len: usize, ptr_align: u8) ?BuddyAllocReturn {
         if (len > self.remaining_capacity) {
             return null;
         }
@@ -128,7 +128,7 @@ const BuddyAllocatorNode = struct {
         return .{ .data = self.buf[start_idx..end_idx].ptr, .size_buffer_used = self.buf.len };
     }
 
-    pub fn free(self: *Self, allocation: []u8) usize {
+    fn free(self: *Self, allocation: []u8) usize {
         if (!contains(self.buf, allocation)) {
             return 0;
         }
@@ -147,7 +147,7 @@ const BuddyAllocatorNode = struct {
         return self.buf.len;
     }
 
-    pub fn resize(self: *Self, allocation: []u8, len: usize, ptr_align: u8) bool {
+    fn resize(self: *Self, allocation: []u8, len: usize, ptr_align: u8) bool {
         if (!contains(self.buf, allocation)) {
             return false;
         }
