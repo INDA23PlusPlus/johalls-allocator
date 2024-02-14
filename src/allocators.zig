@@ -111,9 +111,11 @@ test "contains" {
         alloc.ptr -= 1;
         alloc.len = 1;
         try std.testing.expect(!contains(&buf, alloc));
+        alloc.len = 2;
+        try std.testing.expect(!contains(&buf, alloc));
     }
     {
-        var alloc = buf[(buf.len - 1)..get_runtime_constant(usize, buf.len)];
+        var alloc = buf[get_runtime_constant(usize, buf.len - 1)..buf.len];
         try std.testing.expect(contains(&buf, alloc));
         alloc.ptr += 1;
         alloc.len = 1;
