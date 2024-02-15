@@ -128,7 +128,36 @@ const BuddyAllocReturn = struct {
     size_buffer_used: usize,
 };
 
-const BuddyAllocatorNode = packed struct {
+// makes sure right node is always power of two size
+fn compute_left_node_size(own_size: usize) usize {
+    const log: std.math.Log2Int(usize) = @intCast(std.math.log2(own_size));
+    const rounded = @as(usize, 1) << log;
+    if (rounded == own_size) {
+        return own_size / 2;
+    } else {
+        return own_size - rounded;
+    }
+}
+
+/// computes amount of space wasted by alignment if storying a `T` in `buf`
+fn wasted_space(comptime T: type, buf: []u8) usize {
+    return align_offset(buf.ptr, 0, std.math.log2(@alignOf(T)));
+}
+
+fn num_allocator_nodes(min_size: usize, n: usize) usize {
+    var num_nodes: usize = 1;
+    var layer: usize = 1;
+    var size: usize = n;
+    while (size > min_size) {
+        layer *= 2;
+        num_nodes += layer;
+        const left_size = compute_left_node_size(size);
+        size = @max(left_size, size - left_size);
+    }
+    return num_nodes;
+}
+
+const BuddyAllocatorNode = struct {
     children: ?[*]BuddyAllocatorNode,
     remaining_capacity: usize,
 
@@ -139,10 +168,10 @@ const BuddyAllocatorNode = packed struct {
             return null;
         }
 
-        const left_buf_end = (own_buf.len + 1) / 2;
+        const left_buf_len = compute_left_node_size(own_buf.len);
 
-        const left_buf = own_buf[0..left_buf_end];
-        const right_buf = own_buf[left_buf_end..];
+        const left_buf = own_buf[0..left_buf_len];
+        const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
             for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
@@ -177,10 +206,10 @@ const BuddyAllocatorNode = packed struct {
             return 0;
         }
 
-        const left_buf_end = (own_buf.len + 1) / 2;
+        const left_buf_len = compute_left_node_size(own_buf.len);
 
-        const left_buf = own_buf[0..left_buf_end];
-        const right_buf = own_buf[left_buf_end..];
+        const left_buf = own_buf[0..left_buf_len];
+        const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
             for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
@@ -201,10 +230,10 @@ const BuddyAllocatorNode = packed struct {
             return false;
         }
 
-        const left_buf_end = (own_buf.len + 1) / 2;
+        const left_buf_len = compute_left_node_size(own_buf.len);
 
-        const left_buf = own_buf[0..left_buf_end];
-        const right_buf = own_buf[left_buf_end..];
+        const left_buf = own_buf[0..left_buf_len];
+        const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
             for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
@@ -221,25 +250,25 @@ const BuddyAllocatorNode = packed struct {
         return true;
     }
 
-    fn biggest_possible_allocation(self: *Self, lower_bound: usize, own_buf: []u8) usize {
+    fn biggest_possible_allocation(self: *Self, lower_bound: usize, ptr_align: u8, own_buf: []u8) usize {
         // remaining_capacity is an upper bound on the biggest possible allocation
         if (self.remaining_capacity < lower_bound) {
             return 0;
         }
 
         if (self.remaining_capacity == own_buf.len) {
-            return self.remaining_capacity;
+            return self.remaining_capacity - align_offset(own_buf.ptr, 0, ptr_align);
         }
 
         var ans = lower_bound;
-        const left_buf_end = (own_buf.len + 1) / 2;
+        const left_buf_len = compute_left_node_size(own_buf.len);
 
-        const left_buf = own_buf[0..left_buf_end];
-        const right_buf = own_buf[left_buf_end..];
+        const left_buf = own_buf[0..left_buf_len];
+        const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
             for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
-                const child_val = children[i].biggest_possible_allocation(ans, child_buf);
+                const child_val = children[i].biggest_possible_allocation(ans, ptr_align, child_buf);
                 if (ans < child_val) {
                     ans = child_val;
                 }
@@ -258,7 +287,7 @@ const BuddyAllocatorNode = packed struct {
         std.debug.assert(buf_len > 1);
         std.debug.assert(self.children == null);
 
-        const left_buf_len = (buf_len + 1) / 2;
+        const left_buf_len = compute_left_node_size(buf_len);
 
         self.children = allocator_nodes.*.ptr;
         allocator_nodes.* = allocator_nodes.*[2..];
@@ -267,23 +296,6 @@ const BuddyAllocatorNode = packed struct {
         self.children.?[1].split(allocator_nodes, min_size, buf_len - left_buf_len);
     }
 };
-
-/// computes amount of space wasted by alignment if storying a `T` in `buf`
-fn wasted_space(comptime T: type, buf: []u8) usize {
-    return align_offset(buf.ptr, 0, std.math.log2(@alignOf(T)));
-}
-
-fn num_allocator_nodes(min_size: usize, n: usize) usize {
-    var num_nodes: usize = 1;
-    var layer: usize = 1;
-    var size: usize = n;
-    while (size > min_size) {
-        layer *= 2;
-        num_nodes += layer;
-        size = (size + 1) / 2;
-    }
-    return num_nodes;
-}
 
 test "correct allocator node count" {
     try std.testing.expectEqual(@as(usize, 1), num_allocator_nodes(1, 1));
@@ -307,7 +319,7 @@ pub const BuddyAllocator = struct {
     const Self = @This();
 
     pub fn biggestPossibleAllocation(self: *Self) usize {
-        return self.root.biggest_possible_allocation(0, self.buf);
+        return self.root.biggest_possible_allocation(0, 0, self.buf);
     }
 
     pub fn remainingCapacity(self: *Self) usize {
@@ -351,7 +363,7 @@ pub const BuddyAllocator = struct {
 
         var result: BuddyAllocator = undefined;
         var p: [*]BuddyAllocatorNode = @ptrCast(@alignCast(buf.ptr + wasted_space(BuddyAllocatorNode, buf)));
-        var allocator_nodes = p[0 .. num_allocator_nodes(min_size, size_allocated) - 1];
+        var allocator_nodes = p[0..num_allocator_nodes(min_size, size_allocated)];
         for (0..allocator_nodes.len) |i| {
             allocator_nodes[i].children = null;
         }

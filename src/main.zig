@@ -1,7 +1,8 @@
 const std = @import("std");
 const allocators = @import("allocators.zig");
 
-var buf: [1 << 30]u8 = undefined;
+// just my own crappy testing
+var buf: [1 << 25]u8 = undefined;
 pub fn main() !void {
     // const stdout_file = std.io.getStdOut().writer();
     // var bw = std.io.bufferedWriter(stdout_file);
@@ -42,7 +43,45 @@ pub fn main() !void {
         std.debug.print("free:{}KB\n", .{buddy_alloc.remainingCapacity() >> 10});
         std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggestPossibleAllocation() >> 10});
         const t = buddy_alloc.remainingCapacity() * 100;
-        std.debug.print("efficiency: {}.{:0>3}%\n", .{ t / buf.len, t * 1000 / buf.len % 1000 });
+        std.debug.print("efficiency: {}.{:0>3}% ({}KB used to store internal allocator data structure)\n", .{ t / buf.len, t * 1000 / buf.len % 1000, buf.len - buddy_alloc.remainingCapacity() >> 10 });
+        var allocs: [16384][]usize = undefined;
+        var num_allocated: usize = 0;
+        for (0..allocs.len) |i| {
+            if (alloc.alloc(usize, (16 << 10) / @sizeOf(usize) - 7) catch null) |allocation| {
+                allocs[i] = allocation;
+                for (allocs[i]) |*e| {
+                    e.* = i;
+                }
+                num_allocated += 1;
+            } else {
+                break;
+            }
+        }
+        std.debug.print("num leaves: {}\n", .{num_allocated});
+        std.debug.print("free:{}KB\n", .{buddy_alloc.remainingCapacity() >> 10});
+        var indices: [16384]usize = undefined;
+        for (0..num_allocated) |i| {
+            indices[i] = i;
+        }
+
+        var rand_num: usize = undefined;
+        const ptr_rand_num: [*]u8 = @ptrCast(&rand_num);
+        var view_rand_num: []u8 = undefined;
+        view_rand_num.len = @sizeOf(usize);
+        view_rand_num.ptr = ptr_rand_num;
+        std.crypto.random.bytes(view_rand_num);
+
+        var rng = std.rand.Xoshiro256.init(rand_num);
+        var rand = rng.random();
+        rand.shuffle(usize, indices[0..num_allocated]);
+        for (indices[0..num_allocated]) |i| {
+            // std.debug.print("{}\n", .{i});
+            for (allocs[i]) |e| {
+                std.debug.assert(e == i);
+            }
+            alloc.free(allocs[i]);
+        }
+        std.debug.print("free:{}KB\n", .{buddy_alloc.remainingCapacity() >> 10});
     }
     // {
     //     var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
