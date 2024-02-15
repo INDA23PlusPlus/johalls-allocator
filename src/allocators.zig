@@ -70,21 +70,17 @@ pub const LinearAllocator = struct {
     }
 };
 
-fn contains(buf: ?[]u8, allocation: []u8) bool {
-    if (buf) |b| {
-        const start = @intFromPtr(b.ptr);
-        const end = start + b.len;
+fn contains(buf: []u8, allocation: []u8) bool {
+    const start = @intFromPtr(buf.ptr);
+    const end = start + buf.len;
 
-        const allocation_start = @intFromPtr(allocation.ptr);
-        const allocation_end = allocation_start + allocation.len;
+    const allocation_start = @intFromPtr(allocation.ptr);
+    const allocation_end = allocation_start + allocation.len;
 
-        const allocation_start_within = start <= allocation_start and allocation_start < end;
-        const allocation_end_within = start < allocation_end and allocation_end <= end;
+    const allocation_start_within = start <= allocation_start and allocation_start < end;
+    const allocation_end_within = start < allocation_end and allocation_end <= end;
 
-        return allocation_start_within and allocation_end_within;
-    } else {
-        return false;
-    }
+    return allocation_start_within and allocation_end_within;
 }
 
 /// returns `x` cast to a `T`
@@ -123,11 +119,6 @@ test "contains" {
     }
 }
 
-const BuddyAllocReturn = struct {
-    data: [*]u8,
-    size_buffer_used: usize,
-};
-
 // makes sure right node is always power of two size
 fn compute_left_node_size(own_size: usize) usize {
     const log: std.math.Log2Int(usize) = @intCast(std.math.log2(own_size));
@@ -163,7 +154,15 @@ const BuddyAllocatorNode = struct {
 
     const Self = @This();
 
-    fn alloc(self: *Self, len: usize, ptr_align: u8, own_buf: []u8) ?BuddyAllocReturn {
+    fn alloc(
+        self: *Self,
+        len: usize,
+        ptr_align: u8,
+        own_buf: []u8,
+    ) ?struct {
+        data: [*]u8,
+        size_buffer_used: usize,
+    } {
         if (len > self.remaining_capacity) {
             return null;
         }
@@ -174,8 +173,15 @@ const BuddyAllocatorNode = struct {
         const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
-            for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
-                if (children[i].alloc(len, ptr_align, child_buf)) |allocation| {
+            for (0..2, [_][]u8{ left_buf, right_buf }) |
+                i,
+                child_buf,
+            | {
+                if (children[i].alloc(
+                    len,
+                    ptr_align,
+                    child_buf,
+                )) |allocation| {
                     self.remaining_capacity -= allocation.size_buffer_used;
                     return allocation;
                 }
@@ -194,7 +200,11 @@ const BuddyAllocatorNode = struct {
         }
         self.remaining_capacity = 0;
 
-        return .{ .data = own_buf[start_idx..end_idx].ptr, .size_buffer_used = own_buf.len };
+        return .{
+            // actually slice to make sure we get the runtime check when applicable
+            .data = own_buf[start_idx..end_idx].ptr,
+            .size_buffer_used = own_buf.len,
+        };
     }
 
     fn free(
@@ -212,8 +222,14 @@ const BuddyAllocatorNode = struct {
         const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
-            for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
-                const t = children[i].free(allocation, child_buf);
+            for (0..2, [_][]u8{
+                left_buf,
+                right_buf,
+            }) |i, child_buf| {
+                const t = children[i].free(
+                    allocation,
+                    child_buf,
+                );
                 if (t > 0) {
                     self.remaining_capacity += t;
                     return t;
@@ -225,7 +241,13 @@ const BuddyAllocatorNode = struct {
         return own_buf.len;
     }
 
-    fn resize(self: *Self, allocation: []u8, len: usize, ptr_align: u8, own_buf: []u8) bool {
+    fn resize(
+        self: *Self,
+        allocation: []u8,
+        len: usize,
+        ptr_align: u8,
+        own_buf: []u8,
+    ) bool {
         if (!contains(own_buf, allocation)) {
             return false;
         }
@@ -236,8 +258,16 @@ const BuddyAllocatorNode = struct {
         const right_buf = own_buf[left_buf_len..];
 
         if (self.children) |children| {
-            for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
-                if (children[i].resize(allocation, len, ptr_align, child_buf)) {
+            for (0..2, [_][]u8{
+                left_buf,
+                right_buf,
+            }) |i, child_buf| {
+                if (children[i].resize(
+                    allocation,
+                    len,
+                    ptr_align,
+                    child_buf,
+                )) {
                     return true;
                 }
             }
