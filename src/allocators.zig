@@ -261,9 +261,7 @@ const BuddyAllocatorNode = packed struct {
         const left_buf_len = (buf_len + 1) / 2;
 
         self.children = allocator_nodes.*.ptr;
-        allocator_nodes.* = allocator_nodes.*[1..];
-
-        allocator_nodes.* = allocator_nodes.*[1..];
+        allocator_nodes.* = allocator_nodes.*[2..];
 
         self.children.?[0].split(allocator_nodes, min_size, left_buf_len);
         self.children.?[1].split(allocator_nodes, min_size, buf_len - left_buf_len);
@@ -327,6 +325,11 @@ pub const BuddyAllocator = struct {
         return self.buf.len;
     }
 
+    // defaults to minimum size of 16KB
+    pub fn init(buf: []u8) !BuddyAllocator {
+        return initWithMinSize(buf, 16 << 10);
+    }
+
     pub fn initWithMinSize(buf: []u8, min_size: usize) !BuddyAllocator {
         if (compute_overhead(min_size, min_size, buf) > buf.len) {
             return error.NotEnoughSpace;
@@ -346,13 +349,12 @@ pub const BuddyAllocator = struct {
 
         const size_allocated = lo;
 
+        var result: BuddyAllocator = undefined;
         var p: [*]BuddyAllocatorNode = @ptrCast(@alignCast(buf.ptr + wasted_space(BuddyAllocatorNode, buf)));
         var allocator_nodes = p[0 .. num_allocator_nodes(min_size, size_allocated) - 1];
         for (0..allocator_nodes.len) |i| {
             allocator_nodes[i].children = null;
         }
-
-        var result: BuddyAllocator = undefined;
 
         const usable_start_idx = compute_overhead(min_size, size_allocated, buf);
         const usable_end_idx = usable_start_idx + size_allocated;
@@ -362,13 +364,7 @@ pub const BuddyAllocator = struct {
         // result.root.buf = buf[usable_start_idx..usable_end_idx];
         result.buf = buf[usable_start_idx..usable_end_idx];
         result.root.split(&allocator_nodes, min_size, result.buf.len);
-
         return result;
-    }
-
-    // defaults to minimum size of 16KB
-    pub fn init(buf: []u8) !BuddyAllocator {
-        return initWithMinSize(buf, 16 << 10);
     }
 
     fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
