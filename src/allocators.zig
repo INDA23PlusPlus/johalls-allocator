@@ -20,7 +20,7 @@ pub const LinearAllocator = struct {
     id: usize,
     buf: []u8,
 
-    pub fn remaining_capacity(self: *Self) usize {
+    pub fn remainingCapacity(self: *Self) usize {
         return self.buf.len - self.id;
     }
 
@@ -128,7 +128,7 @@ const BuddyAllocReturn = struct {
     size_buffer_used: usize,
 };
 
-const BuddyAllocatorNode = struct {
+const BuddyAllocatorNode = packed struct {
     children: ?[*]BuddyAllocatorNode,
     remaining_capacity: usize,
 
@@ -303,16 +303,16 @@ const BuddyAllocatorVtable: Allocator.VTable = .{
 };
 
 pub const BuddyAllocator = struct {
-    root: *BuddyAllocatorNode,
+    root: BuddyAllocatorNode,
     buf: []u8,
 
     const Self = @This();
 
-    pub fn biggest_possible_allocation(self: *Self) usize {
+    pub fn biggestPossibleAllocation(self: *Self) usize {
         return self.root.biggest_possible_allocation(0, self.buf);
     }
 
-    pub fn remaining_capacity(self: *Self) usize {
+    pub fn remainingCapacity(self: *Self) usize {
         return self.root.remaining_capacity;
     }
 
@@ -323,12 +323,11 @@ pub const BuddyAllocator = struct {
         };
     }
 
-    pub fn usable_size(self: *Self) usize {
+    pub fn usableSize(self: *Self) usize {
         return self.buf.len;
     }
 
-    pub fn init(buf: []u8) !BuddyAllocator {
-        const min_size = 64 << 10;
+    pub fn initWithMinSize(buf: []u8, min_size: usize) !BuddyAllocator {
         if (compute_overhead(min_size, min_size, buf) > buf.len) {
             return error.NotEnoughSpace;
         }
@@ -348,7 +347,7 @@ pub const BuddyAllocator = struct {
         const size_allocated = lo;
 
         var p: [*]BuddyAllocatorNode = @ptrCast(@alignCast(buf.ptr + wasted_space(BuddyAllocatorNode, buf)));
-        var allocator_nodes = p[0..num_allocator_nodes(min_size, size_allocated)];
+        var allocator_nodes = p[0 .. num_allocator_nodes(min_size, size_allocated) - 1];
         for (0..allocator_nodes.len) |i| {
             allocator_nodes[i].children = null;
         }
@@ -358,14 +357,18 @@ pub const BuddyAllocator = struct {
         const usable_start_idx = compute_overhead(min_size, size_allocated, buf);
         const usable_end_idx = usable_start_idx + size_allocated;
 
-        result.root = &allocator_nodes[0];
-        allocator_nodes = allocator_nodes[1..];
+        result.root.remaining_capacity = 0;
         result.root.children = null;
         // result.root.buf = buf[usable_start_idx..usable_end_idx];
         result.buf = buf[usable_start_idx..usable_end_idx];
         result.root.split(&allocator_nodes, min_size, result.buf.len);
 
         return result;
+    }
+
+    // defaults to minimum size of 16KB
+    pub fn init(buf: []u8) !BuddyAllocator {
+        return initWithMinSize(buf, 16 << 10);
     }
 
     fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {

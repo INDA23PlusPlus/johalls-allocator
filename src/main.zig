@@ -1,7 +1,7 @@
 const std = @import("std");
 const allocators = @import("allocators.zig");
 
-var buf: [64 << 20]u8 = undefined;
+var buf: [1 << 30]u8 = undefined;
 pub fn main() !void {
     // const stdout_file = std.io.getStdOut().writer();
     // var bw = std.io.bufferedWriter(stdout_file);
@@ -20,9 +20,9 @@ pub fn main() !void {
         for (0..N - 1) |i| {
             alloc.free(bufs[N - i - 1]);
         }
-        std.debug.print("free:{}KB\n", .{linear_alloc.remaining_capacity() >> 10});
+        std.debug.print("free:{}KB\n", .{linear_alloc.remainingCapacity() >> 10});
         alloc.free(bufs[0]);
-        std.debug.print("free:{}KB\n", .{linear_alloc.remaining_capacity() >> 10});
+        std.debug.print("free:{}KB\n", .{linear_alloc.remainingCapacity() >> 10});
     }
     {
         var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
@@ -36,11 +36,13 @@ pub fn main() !void {
         for (0..N - 1) |i| {
             alloc.free(bufs[N - i - 1]);
         }
-        std.debug.print("free:{}KB\n", .{buddy_alloc.remaining_capacity() >> 10});
-        std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggest_possible_allocation() >> 10});
+        std.debug.print("free:{}KB\n", .{buddy_alloc.remainingCapacity() >> 10});
+        std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggestPossibleAllocation() >> 10});
         alloc.free(bufs[0]);
-        std.debug.print("free:{}KB\n", .{buddy_alloc.remaining_capacity() >> 10});
-        std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggest_possible_allocation() >> 10});
+        std.debug.print("free:{}KB\n", .{buddy_alloc.remainingCapacity() >> 10});
+        std.debug.print("biggest:{}KB\n", .{buddy_alloc.biggestPossibleAllocation() >> 10});
+        const t = buddy_alloc.remainingCapacity() * 100;
+        std.debug.print("efficiency: {}.{:0>3}%\n", .{ t / buf.len, t * 1000 / buf.len % 1000 });
     }
     // {
     //     var buddy_alloc = try allocators.BuddyAllocator.init(&buf);
