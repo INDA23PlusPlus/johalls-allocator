@@ -149,7 +149,8 @@ fn num_allocator_nodes(min_size: usize, n: usize) usize {
 }
 
 const BuddyAllocatorNode = struct {
-    children: ?[*]BuddyAllocatorNode,
+    // children: ?[*]BuddyAllocatorNode,
+    children_idx: ?usize,
     remaining_capacity: usize,
 
     const Self = @This();
@@ -159,6 +160,7 @@ const BuddyAllocatorNode = struct {
         len: usize,
         ptr_align: u8,
         own_buf: []u8,
+        allocator_nodes: []Self,
     ) ?struct {
         data: [*]u8,
         size_buffer_used: usize,
@@ -172,15 +174,19 @@ const BuddyAllocatorNode = struct {
         const left_buf = own_buf[0..left_buf_len];
         const right_buf = own_buf[left_buf_len..];
 
-        if (self.children) |children| {
-            for (0..2, [_][]u8{ left_buf, right_buf }) |
-                i,
+        if (self.children_idx) |idx| {
+            for (
+                allocator_nodes[idx .. idx + 2],
+                [_][]u8{ left_buf, right_buf },
+            ) |
+                *child,
                 child_buf,
             | {
-                if (children[i].alloc(
+                if (child.alloc(
                     len,
                     ptr_align,
                     child_buf,
+                    allocator_nodes,
                 )) |allocation| {
                     self.remaining_capacity -= allocation.size_buffer_used;
                     return allocation;
@@ -211,6 +217,7 @@ const BuddyAllocatorNode = struct {
         self: *Self,
         allocation: []u8,
         own_buf: []u8,
+        allocator_nodes: []Self,
     ) usize {
         if (!contains(own_buf, allocation)) {
             return 0;
@@ -221,14 +228,18 @@ const BuddyAllocatorNode = struct {
         const left_buf = own_buf[0..left_buf_len];
         const right_buf = own_buf[left_buf_len..];
 
-        if (self.children) |children| {
-            for (0..2, [_][]u8{
-                left_buf,
-                right_buf,
-            }) |i, child_buf| {
-                const t = children[i].free(
+        if (self.children_idx) |idx| {
+            for (
+                allocator_nodes[idx .. idx + 2],
+                [_][]u8{ left_buf, right_buf },
+            ) |
+                *child,
+                child_buf,
+            | {
+                const t = child.free(
                     allocation,
                     child_buf,
+                    allocator_nodes,
                 );
                 if (t > 0) {
                     self.remaining_capacity += t;
@@ -242,11 +253,12 @@ const BuddyAllocatorNode = struct {
     }
 
     fn resize(
-        self: *Self,
+        self: *const Self,
         allocation: []u8,
         len: usize,
         ptr_align: u8,
         own_buf: []u8,
+        allocator_nodes: []Self,
     ) bool {
         if (!contains(own_buf, allocation)) {
             return false;
@@ -257,16 +269,20 @@ const BuddyAllocatorNode = struct {
         const left_buf = own_buf[0..left_buf_len];
         const right_buf = own_buf[left_buf_len..];
 
-        if (self.children) |children| {
-            for (0..2, [_][]u8{
-                left_buf,
-                right_buf,
-            }) |i, child_buf| {
-                if (children[i].resize(
+        if (self.children_idx) |idx| {
+            for (
+                allocator_nodes[idx .. idx + 2],
+                [_][]u8{ left_buf, right_buf },
+            ) |
+                child,
+                child_buf,
+            | {
+                if (child.resize(
                     allocation,
                     len,
                     ptr_align,
                     child_buf,
+                    allocator_nodes,
                 )) {
                     return true;
                 }
@@ -280,7 +296,13 @@ const BuddyAllocatorNode = struct {
         return true;
     }
 
-    fn biggest_possible_allocation(self: *Self, lower_bound: usize, ptr_align: u8, own_buf: []u8) usize {
+    fn biggest_possible_allocation(
+        self: *Self,
+        lower_bound: usize,
+        ptr_align: u8,
+        own_buf: []u8,
+        allocator_nodes: []Self,
+    ) usize {
         // remaining_capacity is an upper bound on the biggest possible allocation
         if (self.remaining_capacity < lower_bound) {
             return 0;
@@ -296,9 +318,20 @@ const BuddyAllocatorNode = struct {
         const left_buf = own_buf[0..left_buf_len];
         const right_buf = own_buf[left_buf_len..];
 
-        if (self.children) |children| {
-            for (0..2, [_][]u8{ left_buf, right_buf }) |i, child_buf| {
-                const child_val = children[i].biggest_possible_allocation(ans, ptr_align, child_buf);
+        if (self.children_idx) |idx| {
+            for (
+                allocator_nodes[idx .. idx + 2],
+                [_][]u8{ left_buf, right_buf },
+            ) |
+                child,
+                child_buf,
+            | {
+                const child_val = child.biggest_possible_allocation(
+                    ans,
+                    ptr_align,
+                    child_buf,
+                    allocator_nodes,
+                );
                 if (ans < child_val) {
                     ans = child_val;
                 }
@@ -308,22 +341,31 @@ const BuddyAllocatorNode = struct {
         return ans;
     }
 
-    fn split(self: *Self, allocator_nodes: *[]BuddyAllocatorNode, min_size: usize, buf_len: usize) void {
+    fn split(
+        self: *Self,
+        idx: *usize,
+        min_size: usize,
+        buf_len: usize,
+        allocator_nodes: []BuddyAllocatorNode,
+    ) void {
         self.remaining_capacity = buf_len;
         if (buf_len <= min_size) {
             return;
         }
 
         std.debug.assert(buf_len > 1);
-        std.debug.assert(self.children == null);
+        std.debug.assert(self.children_idx == null);
 
         const left_buf_len = compute_left_node_size(buf_len);
 
-        self.children = allocator_nodes.*.ptr;
-        allocator_nodes.* = allocator_nodes.*[2..];
+        self.children_idx = idx.*;
 
-        self.children.?[0].split(allocator_nodes, min_size, left_buf_len);
-        self.children.?[1].split(allocator_nodes, min_size, buf_len - left_buf_len);
+        const left = &allocator_nodes[idx.*];
+        const right = &allocator_nodes[idx.* + 1];
+        idx.* += 2;
+
+        left.split(idx, min_size, left_buf_len, allocator_nodes);
+        right.split(idx, min_size, buf_len - left_buf_len, allocator_nodes);
     }
 };
 
@@ -343,8 +385,9 @@ const BuddyAllocatorVtable: Allocator.VTable = .{
 };
 
 pub const BuddyAllocator = struct {
-    root: BuddyAllocatorNode,
+    root: *BuddyAllocatorNode,
     buf: []u8,
+    allocator_nodes: []BuddyAllocatorNode,
 
     const Self = @This();
 
@@ -380,7 +423,7 @@ pub const BuddyAllocator = struct {
         var lo: usize = compute_overhead(min_size, min_size, buf);
         var hi: usize = buf.len;
 
-        for (0..64) |_| {
+        for (0..@bitSizeOf(usize)) |_| {
             const mi = lo + (hi - lo + 1) / 2;
             if (compute_overhead(min_size, mi, buf) + mi <= buf.len) {
                 lo = mi;
@@ -394,25 +437,28 @@ pub const BuddyAllocator = struct {
         var result: BuddyAllocator = undefined;
         var p: [*]BuddyAllocatorNode = @ptrCast(@alignCast(buf.ptr + wasted_space(BuddyAllocatorNode, buf)));
         var allocator_nodes = p[0..num_allocator_nodes(min_size, size_allocated)];
+        result.allocator_nodes = allocator_nodes;
         for (0..allocator_nodes.len) |i| {
-            allocator_nodes[i].children = null;
+            allocator_nodes[i].children_idx = null;
         }
 
         const usable_start_idx = compute_overhead(min_size, size_allocated, buf);
         const usable_end_idx = usable_start_idx + size_allocated;
 
+        result.root = &allocator_nodes[0];
         result.root.remaining_capacity = 0;
-        result.root.children = null;
+        result.root.children_idx = null;
         // result.root.buf = buf[usable_start_idx..usable_end_idx];
         result.buf = buf[usable_start_idx..usable_end_idx];
-        result.root.split(&allocator_nodes, min_size, result.buf.len);
+        var idx: usize = 1;
+        result.root.split(&idx, min_size, result.buf.len, allocator_nodes);
         return result;
     }
 
     fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        if (self.root.alloc(len, ptr_align, self.buf)) |allocation| {
+        if (self.root.alloc(len, ptr_align, self.buf, self.allocator_nodes)) |allocation| {
             return allocation.data;
         } else {
             return null;
@@ -423,13 +469,13 @@ pub const BuddyAllocator = struct {
         _ = buf_align;
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        _ = self.root.free(buf, self.buf);
+        _ = self.root.free(buf, self.buf, self.allocator_nodes);
     }
 
     fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
-        return self.root.resize(buf, new_len, buf_align, self.buf);
+        return self.root.resize(buf, new_len, buf_align, self.buf, self.allocator_nodes);
     }
 };
 
